@@ -112,6 +112,8 @@ type downloader struct {
 	maxPos      int64
 	m2          sync.Mutex
 	readingID   int // 正在被读取的id
+
+	closeOnce sync.Once // interrupt can be called more than once on the same downloader (e.g. via Closers.Close() running twice on the owning FileStream); close(d.chunkChannel) below panics on a repeat call, so guard it
 }
 
 type ConcurrencyLimit struct {
@@ -268,7 +270,7 @@ func (d *downloader) interrupt() error {
 		}
 	}
 	d.cancel(d.err)
-	defer func() {
+	defer d.closeOnce.Do(func() {
 		close(d.chunkChannel)
 		for _, buf := range d.bufs {
 			buf.Close()
@@ -277,7 +279,7 @@ func (d *downloader) interrupt() error {
 			d.concurrency = -d.concurrency
 		}
 		log.Debugf("maxConcurrency:%d", d.cfg.Concurrency+d.concurrency)
-	}()
+	})
 	return d.err
 }
 func (d *downloader) getBuf(id int) (b *Buf) {
@@ -331,6 +333,7 @@ func (d *downloader) downloadChunk(ch *chunk) error {
 	params := d.getParamsFromChunk(ch)
 	var n int64
 	var err error
+	overloadRetry := 0
 	for retry := 0; retry <= d.cfg.PartBodyMaxRetries; retry++ {
 		if d.getErr() != nil {
 			return nil
@@ -363,7 +366,21 @@ func (d *downloader) downloadChunk(ch *chunk) error {
 			}
 			log.Warnf("err chunk_%d, object part download error %s, retrying attempt %d. %v",
 				ch.id, params.URL, retry, err)
-		} else if err == errInfiniteRetry {
+		} else if err == errOverloadRetry {
+			overloadRetry++
+			if overloadRetry > d.cfg.PartBodyMaxRetries*10 {
+				err = fmt.Errorf("chunk_%d: giving up after %d retries while server is overloaded", ch.id, overloadRetry)
+				break
+			}
+			backoff := time.Duration(overloadRetry) * 100 * time.Millisecond
+			if backoff > 2*time.Second {
+				backoff = 2 * time.Second
+			}
+			select {
+			case <-d.ctx.Done():
+				return d.ctx.Err()
+			case <-time.After(backoff):
+			}
 			retry--
 			continue
 		} else {
@@ -375,7 +392,7 @@ func (d *downloader) downloadChunk(ch *chunk) error {
 }
 
 var errCancelConcurrency = fmt.Errorf("cancel concurrency")
-var errInfiniteRetry = fmt.Errorf("infinite retry")
+var errOverloadRetry = fmt.Errorf("overload retry")
 
 func (d *downloader) tryDownloadChunk(params *HttpRequestParams, ch *chunk) (int64, error) {
 	resp, err := d.cfg.HttpClient(d.ctx, params)
@@ -400,7 +417,12 @@ func (d *downloader) tryDownloadChunk(params *HttpRequestParams, ch *chunk) (int
 		}
 
 		// 来到这 说明第1个分片下载 连接成功了
-		// 后续分片下载出错都当超载处理
+		// 后续分片仅在限流/网关类错误时当超载处理，其余错误（如链接过期 403）直接失败
+		switch resp.StatusCode {
+		case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		default:
+			return 0, err
+		}
 		log.Debugf("err chunk_%d, try downloading:%v", ch.id, err)
 
 		d.m.Lock()
@@ -422,7 +444,7 @@ func (d *downloader) tryDownloadChunk(params *HttpRequestParams, ch *chunk) (int
 			defer d.m2.Unlock()
 			<-time.After(time.Millisecond * 200)
 		}
-		return 0, errInfiniteRetry
+		return 0, errOverloadRetry
 	}
 	defer resp.Body.Close()
 	//only check file size on the first task
@@ -643,6 +665,10 @@ func (br *Buf) Read(p []byte) (n int, err error) {
 		return 0, io.EOF
 	}
 	br.rw.Lock()
+	if br.buffer == nil {
+		br.rw.Unlock()
+		return 0, io.ErrClosedPipe
+	}
 	n, err = br.buffer.Read(p)
 	br.rw.Unlock()
 	if err == nil {
@@ -672,10 +698,15 @@ func (br *Buf) Write(p []byte) (n int, err error) {
 	}
 	br.rw.Lock()
 	defer br.rw.Unlock()
+	if br.buffer == nil {
+		return 0, io.ErrClosedPipe
+	}
 	n, err = br.buffer.Write(p)
 	return
 }
 
 func (br *Buf) Close() {
+	br.rw.Lock()
+	defer br.rw.Unlock()
 	br.buffer = nil
 }

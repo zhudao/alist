@@ -6,20 +6,19 @@ import (
 	"io"
 	stdpath "path"
 	"strconv"
-	"strings"
 
 	"github.com/alist-org/alist/v3/internal/conf"
 	"github.com/alist-org/alist/v3/internal/driver"
 	"github.com/alist-org/alist/v3/internal/fs"
 	"github.com/alist-org/alist/v3/internal/model"
 	"github.com/alist-org/alist/v3/internal/setting"
-	"github.com/alist-org/alist/v3/internal/sign"
 	"github.com/alist-org/alist/v3/pkg/utils"
 	"github.com/alist-org/alist/v3/server/common"
 	"github.com/gin-gonic/gin"
 	"github.com/microcosm-cc/bluemonday"
 	log "github.com/sirupsen/logrus"
 	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
 )
 
 func Down(c *gin.Context) {
@@ -57,15 +56,26 @@ func Proxy(c *gin.Context) {
 		common.ErrorResp(c, err, 500)
 		return
 	}
+	if c.Query("type") == "preview" && storage.GetStorage().Driver == "DoubaoNew" {
+		// Force proxy for DoubaoNew preview so headers are preserved.
+		link, file, err := fs.Link(c, rawPath, model.LinkArgs{
+			Header:  c.Request.Header,
+			Type:    c.Query("type"),
+			HttpReq: c.Request,
+		})
+		if err != nil {
+			common.ErrorResp(c, err, 500)
+			return
+		}
+		localProxy(c, link, file, storage.GetStorage().ProxyRange)
+		return
+	}
 	if canProxy(storage, filename) {
 		downProxyUrl := storage.GetStorage().DownProxyUrl
 		if downProxyUrl != "" {
 			_, ok := c.GetQuery("d")
 			if !ok {
-				URL := fmt.Sprintf("%s%s?sign=%s",
-					strings.Split(downProxyUrl, "\n")[0],
-					utils.EncodePath(rawPath, true),
-					sign.Sign(rawPath))
+				URL := common.BuildDownProxyURL(downProxyUrl, rawPath, storage.GetStorage().DownProxySign)
 				c.Redirect(302, URL)
 				return
 			}
@@ -142,7 +152,8 @@ func localProxy(c *gin.Context, link *model.Link, file model.Obj, proxyRange boo
 			}
 
 			var html bytes.Buffer
-			if err = goldmark.Convert(buf.Bytes(), &html); err != nil {
+			md := goldmark.New(goldmark.WithExtensions(extension.GFM))
+			if err = md.Convert(buf.Bytes(), &html); err != nil {
 				err = fmt.Errorf("markdown conversion failed: %w", err)
 			} else {
 				buf.Reset()
@@ -176,6 +187,9 @@ func localProxy(c *gin.Context, link *model.Link, file model.Obj, proxyRange boo
 // solution: text_file + shouldProxy()
 func canProxy(storage driver.Driver, filename string) bool {
 	if storage.Config().MustProxy() || storage.GetStorage().WebProxy || storage.GetStorage().WebdavProxy() {
+		return true
+	}
+	if storage.GetStorage().Driver == "Quark" && utils.GetFileType(filename) == conf.VIDEO {
 		return true
 	}
 	if utils.SliceContains(conf.SlicesMap[conf.ProxyTypes], utils.Ext(filename)) {

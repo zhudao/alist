@@ -8,6 +8,7 @@ import (
 	"github.com/alist-org/alist/v3/internal/op"
 	"github.com/alist-org/alist/v3/internal/setting"
 	"github.com/alist-org/alist/v3/pkg/utils"
+	"github.com/alist-org/alist/v3/server/common"
 	"github.com/alist-org/alist/v3/server/ftp"
 	"github.com/alist-org/alist/v3/server/sftp"
 	"github.com/pkg/errors"
@@ -78,7 +79,7 @@ func (d *SftpDriver) NoClientAuth(conn ssh.ConnMetadata) (*ssh.Permissions, erro
 	if err != nil {
 		return nil, err
 	}
-	if guest.Disabled || !guest.CanFTPAccess() {
+	if guest.Disabled || !common.HasChildPermission(guest, guest.BasePath, common.PermFTPAccess) {
 		return nil, errors.New("user is not allowed to access via SFTP")
 	}
 	return nil, nil
@@ -89,7 +90,7 @@ func (d *SftpDriver) PasswordAuth(conn ssh.ConnMetadata, password []byte) (*ssh.
 	if err != nil {
 		return nil, err
 	}
-	if userObj.Disabled || !userObj.CanFTPAccess() {
+	if userObj.Disabled || !common.HasChildPermission(userObj, userObj.BasePath, common.PermFTPAccess) {
 		return nil, errors.New("user is not allowed to access via SFTP")
 	}
 	passHash := model.StaticHash(string(password))
@@ -104,7 +105,7 @@ func (d *SftpDriver) PublicKeyAuth(conn ssh.ConnMetadata, key ssh.PublicKey) (*s
 	if err != nil {
 		return nil, err
 	}
-	if userObj.Disabled || !userObj.CanFTPAccess() {
+	if userObj.Disabled || !common.HasChildPermission(userObj, userObj.BasePath, common.PermFTPAccess) {
 		return nil, errors.New("user is not allowed to access via SFTP")
 	}
 	keys, _, err := op.GetSSHPublicKeyByUserId(userObj.ID, 1, -1)

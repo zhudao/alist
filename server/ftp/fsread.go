@@ -13,6 +13,7 @@ import (
 	fs2 "io/fs"
 	"net/http"
 	"os"
+	stdpath "path"
 	"time"
 )
 
@@ -30,7 +31,7 @@ func OpenDownload(ctx context.Context, reqPath string, offset int64) (*FileDownl
 		}
 	}
 	ctx = context.WithValue(ctx, "meta", meta)
-	if !common.CanAccess(user, meta, reqPath, ctx.Value("meta_pass").(string)) {
+	if !common.CanAccessWithRoles(user, meta, reqPath, ctx.Value("meta_pass").(string)) {
 		return nil, errs.PermissionDenied
 	}
 
@@ -125,7 +126,7 @@ func Stat(ctx context.Context, path string) (os.FileInfo, error) {
 		}
 	}
 	ctx = context.WithValue(ctx, "meta", meta)
-	if !common.CanAccess(user, meta, reqPath, ctx.Value("meta_pass").(string)) {
+	if !common.CanAccessWithRoles(user, meta, reqPath, ctx.Value("meta_pass").(string)) {
 		return nil, errs.PermissionDenied
 	}
 	obj, err := fs.Get(ctx, reqPath, &fs.GetArgs{})
@@ -148,16 +149,18 @@ func List(ctx context.Context, path string) ([]os.FileInfo, error) {
 		}
 	}
 	ctx = context.WithValue(ctx, "meta", meta)
-	if !common.CanAccess(user, meta, reqPath, ctx.Value("meta_pass").(string)) {
+	if !common.CanAccessWithRoles(user, meta, reqPath, ctx.Value("meta_pass").(string)) {
 		return nil, errs.PermissionDenied
 	}
 	objs, err := fs.List(ctx, reqPath, &fs.ListArgs{})
 	if err != nil {
 		return nil, err
 	}
-	ret := make([]os.FileInfo, len(objs))
-	for i, obj := range objs {
-		ret[i] = &OsFileInfoAdapter{obj: obj}
+	ret := make([]os.FileInfo, 0, len(objs))
+	for _, obj := range objs {
+		if common.CanReadPathByRole(user, stdpath.Join(reqPath, obj.GetName())) {
+			ret = append(ret, &OsFileInfoAdapter{obj: obj})
+		}
 	}
 	return ret, nil
 }

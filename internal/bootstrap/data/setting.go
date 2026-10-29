@@ -17,6 +17,36 @@ import (
 
 var initialSettingItems []model.SettingItem
 
+// legacyDefaults lists values a setting shipped as its default in versions
+// older than the one PreDefault records. Keeping the whole chain matters
+// because an install only ever carries the default of the version it was set
+// up with: matching just the newest one leaves older installs pinned to a
+// default they never chose.
+var legacyDefaults = map[string][]string{
+	// The original polyfill.io domain changed hands in 2024 and served
+	// malware to visitors. It is no longer needed either: the frontend's
+	// legacy bundle carries the String.prototype.replaceAll polyfill itself.
+	conf.CustomizeHead: {
+		`<script src="https://polyfill.io/v3/polyfill.min.js?features=String.prototype.replaceAll"></script>`,
+	},
+}
+
+// isShippedDefault reports whether value is one of the defaults this setting
+// was seeded with, in this or an earlier version. Such a value was never
+// chosen by the user, so an upgrade is free to replace it with the current
+// default; anything else is treated as a customisation and preserved.
+func isShippedDefault(item *model.SettingItem, value string) bool {
+	if value == item.PreDefault {
+		return true
+	}
+	for _, legacy := range legacyDefaults[item.Key] {
+		if value == legacy {
+			return true
+		}
+	}
+	return false
+}
+
 func initSettings() {
 	InitialSettings()
 	// check deprecated
@@ -52,7 +82,7 @@ func initSettings() {
 				continue
 			}
 		}
-		if stored != nil && item.Key != conf.VERSION && stored.Value != item.PreDefault {
+		if stored != nil && item.Key != conf.VERSION && !isShippedDefault(item, stored.Value) {
 			item.Value = stored.Value
 		}
 		_, err = op.HandleSettingItemHook(item)
@@ -91,6 +121,7 @@ func InitialSettings() []model.SettingItem {
 	} else {
 		token = random.Token()
 	}
+	defaultRoleID := strconv.Itoa(model.GUEST)
 	initialSettingItems = []model.SettingItem{
 		// site settings
 		{Key: conf.VERSION, Value: conf.Version, Type: conf.TypeString, Group: model.SITE, Flag: model.READONLY},
@@ -99,10 +130,15 @@ func InitialSettings() []model.SettingItem {
 		{Key: conf.SiteTitle, Value: "AList", Type: conf.TypeString, Group: model.SITE},
 		{Key: conf.Announcement, Value: "### repo\nhttps://github.com/alist-org/alist", Type: conf.TypeText, Group: model.SITE},
 		{Key: "pagination_type", Value: "all", Type: conf.TypeSelect, Options: "all,pagination,load_more,auto_load_more", Group: model.SITE},
-		{Key: "default_page_size", Value: "30", Type: conf.TypeNumber, Group: model.SITE},
+		{Key: "default_page_size", Value: "50", Type: conf.TypeNumber, Group: model.SITE},
 		{Key: conf.AllowIndexed, Value: "false", Type: conf.TypeBool, Group: model.SITE},
 		{Key: conf.AllowMounted, Value: "true", Type: conf.TypeBool, Group: model.SITE},
 		{Key: conf.RobotsTxt, Value: "User-agent: *\nAllow: /", Type: conf.TypeText, Group: model.SITE},
+		{Key: conf.AllowRegister, Value: "false", Type: conf.TypeBool, Group: model.SITE},
+		{Key: conf.DefaultRole, Value: defaultRoleID, Type: conf.TypeSelect, Group: model.SITE},
+		// newui settings
+		{Key: conf.UseNewui, Value: "false", Type: conf.TypeBool, Group: model.SITE},
+		{Key: conf.FrontendRememberSort, Value: "false", Type: conf.TypeBool, Group: model.SITE, Help: "Persist frontend list sorting in the browser. When disabled, backend/driver order is used until the user sorts manually in the current session."},
 		// style settings
 		{Key: conf.Logo, Value: "https://cdn.jsdelivr.net/gh/alist-org/logo@main/logo.svg", Type: conf.TypeText, Group: model.STYLE},
 		{Key: conf.Favicon, Value: "https://cdn.jsdelivr.net/gh/alist-org/logo@main/logo.svg", Type: conf.TypeString, Group: model.STYLE},
@@ -131,6 +167,7 @@ func InitialSettings() []model.SettingItem {
 		"EPUB.js":"https://alist-org.github.io/static/epub.js/viewer.html?url=$e_url"
 	}
 }`, Type: conf.TypeText, Group: model.PREVIEW},
+		{Key: "preview_settings", Value: `{}`, Type: conf.TypeText, Group: model.PREVIEW},
 		//		{Key: conf.OfficeViewers, Value: `{
 		//	"Microsoft":"https://view.officeapps.live.com/op/view.aspx?src=$url",
 		//	"Google":"https://docs.google.com/gview?url=$url&embedded=true",
@@ -141,6 +178,7 @@ func InitialSettings() []model.SettingItem {
 		{Key: "audio_cover", Value: "https://jsd.nn.ci/gh/alist-org/logo@main/logo.svg", Type: conf.TypeString, Group: model.PREVIEW},
 		{Key: conf.AudioAutoplay, Value: "true", Type: conf.TypeBool, Group: model.PREVIEW},
 		{Key: conf.VideoAutoplay, Value: "true", Type: conf.TypeBool, Group: model.PREVIEW},
+		{Key: conf.ThumbnailSize, Value: "144", Type: conf.TypeNumber, Group: model.PREVIEW, Help: "Thumbnail width in pixels. Height is scaled proportionally."},
 		{Key: conf.PreviewArchivesByDefault, Value: "true", Type: conf.TypeBool, Group: model.PREVIEW},
 		{Key: conf.ReadMeAutoRender, Value: "true", Type: conf.TypeBool, Group: model.PREVIEW},
 		{Key: conf.FilterReadMeScripts, Value: "true", Type: conf.TypeBool, Group: model.PREVIEW},
@@ -155,15 +193,20 @@ func InitialSettings() []model.SettingItem {
 ([[:xdigit:]]{1,4}(?::[[:xdigit:]]{1,4}){7}|::|:(?::[[:xdigit:]]{1,4}){1,6}|[[:xdigit:]]{1,4}:(?::[[:xdigit:]]{1,4}){1,5}|(?:[[:xdigit:]]{1,4}:){2}(?::[[:xdigit:]]{1,4}){1,4}|(?:[[:xdigit:]]{1,4}:){3}(?::[[:xdigit:]]{1,4}){1,3}|(?:[[:xdigit:]]{1,4}:){4}(?::[[:xdigit:]]{1,4}){1,2}|(?:[[:xdigit:]]{1,4}:){5}:[[:xdigit:]]{1,4}|(?:[[:xdigit:]]{1,4}:){1,6}:)
 (?U)access_token=(.*)&`,
 			Type: conf.TypeText, Group: model.GLOBAL, Flag: model.PRIVATE},
-		{Key: conf.OcrApi, Value: "https://api.nn.ci/ocr/file/json", Type: conf.TypeString, Group: model.GLOBAL},
+		{Key: conf.OcrApi, Value: "https://api.alistgo.com/ocr/file/json", Type: conf.TypeString, Group: model.GLOBAL},
 		{Key: conf.FilenameCharMapping, Value: `{"/": "|"}`, Type: conf.TypeText, Group: model.GLOBAL},
 		{Key: conf.ForwardDirectLinkParams, Value: "false", Type: conf.TypeBool, Group: model.GLOBAL},
 		{Key: conf.IgnoreDirectLinkParams, Value: "sign,alist_ts", Type: conf.TypeString, Group: model.GLOBAL},
 		{Key: conf.WebauthnLoginEnabled, Value: "false", Type: conf.TypeBool, Group: model.GLOBAL, Flag: model.PUBLIC},
+		{Key: conf.MaxDevices, Value: "0", Type: conf.TypeNumber, Group: model.GLOBAL},
+		{Key: conf.DeviceEvictPolicy, Value: "deny", Type: conf.TypeSelect, Options: "deny,evict_oldest", Group: model.GLOBAL},
+		{Key: conf.DeviceSessionTTL, Value: "86400", Type: conf.TypeNumber, Group: model.GLOBAL},
+		{Key: conf.MetaNotFoundCacheExpire, Value: "60", Type: conf.TypeNumber, Group: model.GLOBAL, Flag: model.PRIVATE, Help: "Negative cache expiration for missing meta records, in seconds. Set 0 to disable."},
+		{Key: conf.MaxExtractSize, Value: "0", Type: conf.TypeNumber, Group: model.GLOBAL, Flag: model.PRIVATE, Help: "Max total size of files decompressed by a single task, in GB. Set 0 for unlimited."},
 
 		// single settings
 		{Key: conf.Token, Value: token, Type: conf.TypeString, Group: model.SINGLE, Flag: model.PRIVATE},
-		{Key: conf.SearchIndex, Value: "none", Type: conf.TypeSelect, Options: "database,database_non_full_text,bleve,meilisearch,none", Group: model.INDEX},
+		{Key: conf.SearchIndex, Value: "none", Type: conf.TypeSelect, Options: "database,database_non_full_text,bleve,meilisearch,no_index,none", Group: model.INDEX},
 		{Key: conf.AutoUpdateIndex, Value: "false", Type: conf.TypeBool, Group: model.INDEX},
 		{Key: conf.IgnorePaths, Value: "", Type: conf.TypeText, Group: model.INDEX, Flag: model.PRIVATE, Help: `one path per line`},
 		{Key: conf.MaxIndexDepth, Value: "20", Type: conf.TypeNumber, Group: model.INDEX, Flag: model.PRIVATE, Help: `max depth of index`},
@@ -181,7 +224,7 @@ func InitialSettings() []model.SettingItem {
 		{Key: conf.SSOJwtPublicKey, Value: "", Type: conf.TypeString, Group: model.SSO, Flag: model.PRIVATE},
 		{Key: conf.SSOExtraScopes, Value: "", Type: conf.TypeString, Group: model.SSO, Flag: model.PRIVATE},
 		{Key: conf.SSOAutoRegister, Value: "false", Type: conf.TypeBool, Group: model.SSO, Flag: model.PRIVATE},
-		{Key: conf.SSODefaultDir, Value: "/", Type: conf.TypeString, Group: model.SSO, Flag: model.PRIVATE},
+		{Key: conf.SSODefaultDir, Value: "/", Type: conf.TypeString, Group: model.SSO, Flag: model.DEPRECATED},
 		{Key: conf.SSODefaultPermission, Value: "0", Type: conf.TypeNumber, Group: model.SSO, Flag: model.PRIVATE},
 		{Key: conf.SSOCompatibilityMode, Value: "false", Type: conf.TypeBool, Group: model.SSO, Flag: model.PUBLIC},
 
@@ -192,7 +235,7 @@ func InitialSettings() []model.SettingItem {
 		{Key: conf.LdapManagerPassword, Value: "", Type: conf.TypeString, Group: model.LDAP, Flag: model.PRIVATE},
 		{Key: conf.LdapUserSearchBase, Value: "", Type: conf.TypeString, Group: model.LDAP, Flag: model.PRIVATE},
 		{Key: conf.LdapUserSearchFilter, Value: "(uid=%s)", Type: conf.TypeString, Group: model.LDAP, Flag: model.PRIVATE},
-		{Key: conf.LdapDefaultDir, Value: "/", Type: conf.TypeString, Group: model.LDAP, Flag: model.PRIVATE},
+		{Key: conf.LdapDefaultDir, Value: "/", Type: conf.TypeString, Group: model.LDAP, Flag: model.DEPRECATED},
 		{Key: conf.LdapDefaultPermission, Value: "0", Type: conf.TypeNumber, Group: model.LDAP, Flag: model.PRIVATE},
 		{Key: conf.LdapLoginTips, Value: "login with ldap", Type: conf.TypeString, Group: model.LDAP, Flag: model.PUBLIC},
 
@@ -210,6 +253,21 @@ func InitialSettings() []model.SettingItem {
 		{Key: conf.FTPImplicitTLS, Value: "false", Type: conf.TypeBool, Group: model.FTP, Flag: model.PRIVATE},
 		{Key: conf.FTPTLSPrivateKeyPath, Value: "", Type: conf.TypeString, Group: model.FTP, Flag: model.PRIVATE},
 		{Key: conf.FTPTLSPublicCertPath, Value: "", Type: conf.TypeString, Group: model.FTP, Flag: model.PRIVATE},
+
+		// frp settings
+		{Key: conf.FRPEnabled, Value: "false", Type: conf.TypeBool, Group: model.FRP, Flag: model.PRIVATE},
+		{Key: conf.FRPServerAddr, Value: "", Type: conf.TypeString, Group: model.FRP, Flag: model.PRIVATE},
+		{Key: conf.FRPServerPort, Value: "7000", Type: conf.TypeNumber, Group: model.FRP, Flag: model.PRIVATE},
+		{Key: conf.FRPAuthToken, Value: "", Type: conf.TypeString, Group: model.FRP, Flag: model.PRIVATE},
+		{Key: conf.FRPProxyName, Value: "alist", Type: conf.TypeString, Group: model.FRP, Flag: model.PRIVATE},
+		{Key: conf.FRPProxyType, Value: "http", Type: conf.TypeSelect, Options: "http,https,tcp,stcp", Group: model.FRP, Flag: model.PRIVATE},
+		{Key: conf.FRPCustomDomain, Value: "", Type: conf.TypeString, Group: model.FRP, Flag: model.PRIVATE},
+		{Key: conf.FRPSubdomain, Value: "", Type: conf.TypeString, Group: model.FRP, Flag: model.PRIVATE},
+		{Key: conf.FRPRemotePort, Value: "0", Type: conf.TypeNumber, Group: model.FRP, Flag: model.PRIVATE},
+		{Key: conf.FRPLocalPort, Value: "5244", Type: conf.TypeNumber, Group: model.FRP, Flag: model.PRIVATE},
+		{Key: conf.FRPTLSEnable, Value: "false", Type: conf.TypeBool, Group: model.FRP, Flag: model.PRIVATE},
+		{Key: conf.FRPSTCPSecretKey, Value: "", Type: conf.TypeString, Group: model.FRP, Flag: model.PRIVATE, Help: "Required for stcp proxy type"},
+		{Key: conf.FRPStatus, Value: "stopped", Type: conf.TypeString, Group: model.FRP, Flag: model.READONLY},
 
 		// traffic settings
 		{Key: conf.TaskOfflineDownloadThreadsNum, Value: strconv.Itoa(conf.Conf.Tasks.Download.Workers), Type: conf.TypeNumber, Group: model.TRAFFIC, Flag: model.PRIVATE},

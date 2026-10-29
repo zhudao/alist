@@ -13,6 +13,7 @@ import (
 
 	"github.com/alist-org/alist/v3/internal/model"
 	"github.com/alist-org/alist/v3/internal/net"
+	"github.com/alist-org/alist/v3/internal/sign"
 	"github.com/alist-org/alist/v3/internal/stream"
 	"github.com/alist-org/alist/v3/pkg/http_range"
 	"github.com/alist-org/alist/v3/pkg/utils"
@@ -79,6 +80,17 @@ func Proxy(w http.ResponseWriter, r *http.Request, link *model.Link, file model.
 		defer res.Body.Close()
 
 		maps.Copy(w.Header(), res.Header)
+		// Keep the upstream Content-Type as-is: some drivers proxy content
+		// (e.g. a .webp thumbnail) that legitimately differs from what the
+		// file name would suggest, and overwriting it here breaks previews.
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if r.URL.Query().Get("type") == "preview" {
+			if isInlineSafeContentType(w.Header().Get("Content-Type")) {
+				w.Header().Set("Content-Disposition", fmt.Sprintf(`inline; filename="%s"; filename*=UTF-8''%s`, file.GetName(), url.PathEscape(file.GetName())))
+			} else {
+				w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, file.GetName(), url.PathEscape(file.GetName())))
+			}
+		}
 		w.WriteHeader(res.StatusCode)
 		if r.Method == http.MethodHead {
 			return nil
@@ -96,6 +108,23 @@ func attachHeader(w http.ResponseWriter, file model.Obj) {
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"; filename*=UTF-8''%s`, fileName, url.PathEscape(fileName)))
 	w.Header().Set("Content-Type", utils.GetMimeType(fileName))
 	w.Header().Set("Etag", GetEtag(file))
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+}
+
+// inlineUnsafeContentTypes are MIME types that browsers can render as active
+// content (script execution) when served with Content-Disposition: inline.
+var inlineUnsafeContentTypes = map[string]bool{
+	"text/html":             true,
+	"application/xhtml+xml": true,
+	"image/svg+xml":         true,
+}
+
+// isInlineSafeContentType reports whether contentType may be served with
+// Content-Disposition: inline for preview purposes.
+func isInlineSafeContentType(contentType string) bool {
+	base, _, _ := strings.Cut(contentType, ";")
+	base = strings.ToLower(strings.TrimSpace(base))
+	return !inlineUnsafeContentTypes[base]
 }
 func GetEtag(file model.Obj) string {
 	hash := ""
@@ -127,6 +156,14 @@ func ProxyRange(link *model.Link, size int64) {
 	} else if link.RangeReadCloser == NoProxyRange {
 		link.RangeReadCloser = nil
 	}
+}
+
+func BuildDownProxyURL(downProxyURL, path string, useSign bool) string {
+	base := strings.Split(downProxyURL, "\n")[0]
+	if useSign {
+		return fmt.Sprintf("%s%s?sign=%s", base, utils.EncodePath(path, true), sign.Sign(path))
+	}
+	return fmt.Sprintf("%s%s", base, utils.EncodePath(path, true))
 }
 
 type InterceptResponseWriter struct {

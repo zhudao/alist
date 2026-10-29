@@ -1,14 +1,16 @@
 package iso9660
 
 import (
-	"github.com/alist-org/alist/v3/internal/archive/tool"
-	"github.com/alist-org/alist/v3/internal/errs"
-	"github.com/alist-org/alist/v3/internal/model"
-	"github.com/alist-org/alist/v3/internal/stream"
-	"github.com/kdomanski/iso9660"
 	"io"
 	"os"
-	stdpath "path"
+
+	"github.com/alist-org/alist/v3/internal/archive/tool"
+	"github.com/alist-org/alist/v3/internal/conf"
+	"github.com/alist-org/alist/v3/internal/errs"
+	"github.com/alist-org/alist/v3/internal/model"
+	"github.com/alist-org/alist/v3/internal/setting"
+	"github.com/alist-org/alist/v3/internal/stream"
+	"github.com/kdomanski/iso9660"
 )
 
 type ISO9660 struct {
@@ -76,19 +78,23 @@ func (ISO9660) Decompress(ss []*stream.SeekableStream, outputPath string, args m
 	if err != nil {
 		return err
 	}
+	limiter := tool.NewSizeLimiter(int64(setting.GetInt(conf.MaxExtractSize, 0)) << 30)
 	if obj.IsDir() {
 		if args.InnerPath != "/" {
-			outputPath = stdpath.Join(outputPath, obj.Name())
+			outputPath, err = tool.SecureJoin(outputPath, obj.Name())
+			if err != nil {
+				return err
+			}
 			if err = os.MkdirAll(outputPath, 0700); err != nil {
 				return err
 			}
 		}
 		var children []*iso9660.File
 		if children, err = obj.GetChildren(); err == nil {
-			err = decompressAll(children, outputPath)
+			err = decompressAll(children, outputPath, limiter)
 		}
 	} else {
-		err = decompress(obj, outputPath, up)
+		err = decompress(obj, outputPath, up, limiter)
 	}
 	return err
 }

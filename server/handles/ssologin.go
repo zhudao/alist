@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"github.com/alist-org/alist/v3/internal/op"
 	"net/http"
 	"net/url"
 	"path"
@@ -153,15 +154,15 @@ func autoRegister(username, userID string, err error) (*model.User, error) {
 		Username:   username,
 		Password:   random.String(16),
 		Permission: int32(setting.GetInt(conf.SSODefaultPermission, 0)),
-		BasePath:   setting.GetStr(conf.SSODefaultDir),
-		Role:       0,
+		BasePath:   "/",
+		Role:       model.Roles{op.GetDefaultRoleID()},
 		Disabled:   false,
 		SsoID:      userID,
 	}
-	if err = db.CreateUser(user); err != nil {
+	if err = op.CreateUser(user); err != nil {
 		if strings.HasPrefix(err.Error(), "UNIQUE constraint failed") && strings.HasSuffix(err.Error(), "username") {
 			user.Username = user.Username + "_" + userID
-			if err = db.CreateUser(user); err != nil {
+			if err = op.CreateUser(user); err != nil {
 				return nil, err
 			}
 		} else {
@@ -256,6 +257,7 @@ func OIDCLoginCallback(c *gin.Context) {
 			user, err = autoRegister(userID, userID, err)
 			if err != nil {
 				common.ErrorResp(c, err, 400)
+				return
 			}
 		}
 		token, err := common.GenerateToken(user)

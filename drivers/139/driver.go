@@ -40,34 +40,19 @@ func (d *Yun139) GetAddition() driver.Additional {
 
 func (d *Yun139) Init(ctx context.Context) error {
 	if d.ref == nil {
-		if len(d.Authorization) == 0 {
-			return fmt.Errorf("authorization is empty")
+		if err := d.validateAndInitCredentials(); err != nil {
+			return err
 		}
+
 		err := d.refreshToken()
 		if err != nil {
 			return err
 		}
-
-		// Query Route Policy
-		var resp QueryRoutePolicyResp
-		_, err = d.requestRoute(base.Json{
-			"userInfo": base.Json{
-				"userType":    1,
-				"accountType": 1,
-				"accountName": d.Account},
-			"modAddrType": 1,
-		}, &resp)
-		if err != nil {
-			return err
-		}
-		for _, policyItem := range resp.Data.RoutePolicyList {
-			if policyItem.ModName == "personal" {
-				d.PersonalCloudHost = policyItem.HttpsUrl
-				break
+		if d.Addition.Type == MetaPersonalNew {
+			err = d.ensurePersonalCloudHost()
+			if err != nil {
+				return err
 			}
-		}
-		if len(d.PersonalCloudHost) == 0 {
-			return fmt.Errorf("PersonalCloudHost is empty")
 		}
 
 		d.cron = cron.NewCron(time.Hour * 12)
@@ -92,6 +77,10 @@ func (d *Yun139) Init(ctx context.Context) error {
 			d.RootFolderID = d.CloudID
 		}
 	case MetaFamily:
+	case "share":
+		if len(d.Addition.RootFolderID) == 0 {
+			d.RootFolderID = "root"
+		}
 	default:
 		return errs.NotImplement
 	}
@@ -116,6 +105,7 @@ func (d *Yun139) Drop(ctx context.Context) error {
 }
 
 func (d *Yun139) List(ctx context.Context, dir model.Obj, args model.ListArgs) ([]model.Obj, error) {
+	log.Infof("[139Share-Debug] List called! Type: %s, DirID: %s", d.Addition.Type, dir.GetID())
 	switch d.Addition.Type {
 	case MetaPersonalNew:
 		return d.personalGetFiles(dir.GetID())
@@ -125,6 +115,8 @@ func (d *Yun139) List(ctx context.Context, dir model.Obj, args model.ListArgs) (
 		return d.familyGetFiles(dir.GetID())
 	case MetaGroup:
 		return d.groupGetFiles(dir.GetID())
+	case "share":
+		return d.shareGetFiles(dir.GetID())
 	default:
 		return nil, errs.NotImplement
 	}
@@ -142,6 +134,8 @@ func (d *Yun139) Link(ctx context.Context, file model.Obj, args model.LinkArgs) 
 		url, err = d.familyGetLink(file.GetID(), file.GetPath())
 	case MetaGroup:
 		url, err = d.groupGetLink(file.GetID(), file.GetPath())
+	case "share":
+		return d.shareGetLink(file.GetID())
 	default:
 		return nil, errs.NotImplement
 	}
@@ -519,6 +513,9 @@ func (d *Yun139) getPartSize(size int64) int64 {
 func (d *Yun139) Put(ctx context.Context, dstDir model.Obj, stream model.FileStreamer, up driver.UpdateProgress) error {
 	switch d.Addition.Type {
 	case MetaPersonalNew:
+		if d.ParallelUpload {
+			return d.putPersonalNewParallel(ctx, dstDir, stream, up)
+		}
 		var err error
 		fullHash := stream.GetHash().GetHash(utils.SHA256)
 		if len(fullHash) != utils.SHA256.Width {
@@ -597,7 +594,7 @@ func (d *Yun139) Put(ctx context.Context, dstDir model.Obj, stream model.FileStr
 			uploadPartInfos := resp.Data.PartInfos
 
 			// 获取后续分片的上传地址
-			for i := 101; i < len(partInfos); i += 100 {
+			for i := 100; i < len(partInfos); i += 100 {
 				end := i + 100
 				if end > len(partInfos) {
 					end = len(partInfos)

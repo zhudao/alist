@@ -117,6 +117,11 @@ func getMainItems(config driver.Config) []driver.Item {
 		Name: "down_proxy_url",
 		Type: conf.TypeText,
 	})
+	items = append(items, driver.Item{
+		Name:    "down_proxy_sign",
+		Type:    conf.TypeBool,
+		Default: "true",
+	})
 	if config.LocalSort {
 		items = append(items, []driver.Item{{
 			Name:    "order_by",
@@ -168,6 +173,7 @@ func getAdditionalItems(t reflect.Type, defaultRoot string) []driver.Item {
 			Options:  tag.Get("options"),
 			Required: tag.Get("required") == "true",
 			Help:     tag.Get("help"),
+			ShowWhen: tag.Get("show_when"),
 		}
 		if tag.Get("type") != "" {
 			item.Type = tag.Get("type")

@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"github.com/alist-org/alist/v3/server/common"
 	log "github.com/sirupsen/logrus"
 	"io"
 
@@ -20,6 +21,10 @@ import (
 type ListArgs struct {
 	Refresh bool
 	NoLog   bool
+	// NoUpdateIndex skips the auto search-index update hook for this listing.
+	// Wrapper drivers set it when listing their underlying storage so the real
+	// path is not auto-indexed alongside the wrapper's mount path.
+	NoUpdateIndex bool
 }
 
 func List(ctx context.Context, path string, args *ListArgs) ([]model.Obj, error) {
@@ -66,6 +71,9 @@ func MakeDir(ctx context.Context, path string, lazyCache ...bool) error {
 }
 
 func Move(ctx context.Context, srcPath, dstDirPath string, lazyCache ...bool) error {
+	if user, ok := ctx.Value("user").(*model.User); ok && !common.IsPathInRoleScope(user, dstDirPath) {
+		return errs.PermissionDenied
+	}
 	err := move(ctx, srcPath, dstDirPath, lazyCache...)
 	if err != nil {
 		log.Errorf("failed move %s to %s: %+v", srcPath, dstDirPath, err)
@@ -74,6 +82,9 @@ func Move(ctx context.Context, srcPath, dstDirPath string, lazyCache ...bool) er
 }
 
 func Copy(ctx context.Context, srcObjPath, dstDirPath string, lazyCache ...bool) (task.TaskExtensionInfo, error) {
+	if user, ok := ctx.Value("user").(*model.User); ok && !common.IsPathInRoleScope(user, dstDirPath) {
+		return nil, errs.PermissionDenied
+	}
 	res, err := _copy(ctx, srcObjPath, dstDirPath, lazyCache...)
 	if err != nil {
 		log.Errorf("failed copy %s to %s: %+v", srcObjPath, dstDirPath, err)

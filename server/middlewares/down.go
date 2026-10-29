@@ -41,9 +41,9 @@ func Down(verifyFunc func(string, string) error) func(c *gin.Context) {
 	}
 }
 
-// TODO: implement
-// path maybe contains # ? etc.
 func parsePath(path string) string {
+	// Gin has already decoded the URL path. Decoding again corrupts literal
+	// percent signs and filenames containing escape sequences such as %2F.
 	return utils.FixAndCleanPath(path)
 }
 
